@@ -1,0 +1,8 @@
+*.bak-*
+*.before-*
+result
+result-*
+.direnv/
+secrets/*.dec.*
+*.key
+*token*

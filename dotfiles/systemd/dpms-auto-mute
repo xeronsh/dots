@@ -1,0 +1,64 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+WPCTL="${WPCTL:-/run/current-system/sw/bin/wpctl}"
+DMS="${DMS:-/run/current-system/sw/bin/dms}"
+KBD_LED="/sys/class/leds/tpacpi::kbd_backlight/brightness"
+STATE_FILE="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/dpms-auto-mute.state"
+
+screens_all_off() {
+  local has_connected=0
+  local connector status dpms
+  for connector in /sys/class/drm/card*-*; do
+    [[ -f "${connector}/status" && -f "${connector}/dpms" ]] || continue
+    read -r status < "${connector}/status" || continue
+    [[ "${status}" == "connected" ]] || continue
+    has_connected=1
+    read -r dpms < "${connector}/dpms" || continue
+    if [[ "${dpms}" == "On" ]]; then
+      return 1
+    fi
+  done
+  [[ "${has_connected}" -eq 1 ]]
+}
+
+is_sink_muted() {
+  local vol
+  vol=$("${WPCTL}" get-volume @DEFAULT_AUDIO_SINK@ 2>/dev/null || true)
+  [[ "${vol}" == *"[MUTED]"* ]]
+}
+
+prev_off=""
+while true; do
+  if screens_all_off; then
+    off=1
+  else
+    off=0
+  fi
+
+  if [[ "${off}" != "${prev_off}" ]]; then
+    if [[ "${off}" -eq 1 ]]; then
+      if ! is_sink_muted; then
+        "${WPCTL}" set-mute @DEFAULT_AUDIO_SINK@ 1 2>/dev/null || true
+        printf '1\n' > "${STATE_FILE}"
+      else
+        printf '0\n' > "${STATE_FILE}"
+      fi
+    else
+      if [[ -f "${STATE_FILE}" ]] && [[ "$(cat "${STATE_FILE}" 2>/dev/null || echo 0)" == "1" ]]; then
+        "${WPCTL}" set-mute @DEFAULT_AUDIO_SINK@ 0 2>/dev/null || true
+        printf '0\n' > "${STATE_FILE}"
+      fi
+    fi
+    prev_off="${off}"
+  fi
+
+  if [[ -f "${KBD_LED}" ]]; then
+    read -r kbd_b < "${KBD_LED}" 2>/dev/null || kbd_b=0
+    if [[ "${kbd_b}" != "0" ]]; then
+      "${DMS}" ipc call brightness set 0 leds:tpacpi::kbd_backlight >/dev/null 2>&1 || true
+    fi
+  fi
+
+  sleep 1
+done
